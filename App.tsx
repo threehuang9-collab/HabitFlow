@@ -1,36 +1,60 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { LayoutDashboard, BarChart3, Bot, Plus, Trophy, X, Quote as QuoteIcon, Calendar } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Bot, Plus, Trophy, X, Quote as QuoteIcon, Calendar, CheckSquare, Hash, Timer as TimerIcon, LogOut } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { HabitCard } from './components/HabitCard';
 import { StatsView } from './components/StatsView';
 import { AICoach } from './components/AICoach';
+import { FocusTimer } from './components/FocusTimer';
 import { getDailyQuote } from './services/geminiService';
-import { Habit, HabitLog, UserProfile, INITIAL_HABITS, LEVEL_THRESHOLDS, ICONS, COLORS } from './types';
+import { Habit, HabitLog, UserProfile, INITIAL_HABITS, LEVEL_THRESHOLDS, ICONS, COLORS, HabitType } from './types';
 
 function App() {
   // State
   const [activeTab, setActiveTab] = useState<'dashboard' | 'stats' | 'ai'>('dashboard');
   const [habits, setHabits] = useState<Habit[]>(() => {
     const saved = localStorage.getItem('habits');
-    return saved ? JSON.parse(saved) : INITIAL_HABITS;
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.length > 0 && !parsed[0].type) {
+             return parsed.map((h: any) => ({ ...h, type: 'check', goal: 1, unit: '次' }));
+        }
+        return parsed;
+    }
+    return INITIAL_HABITS;
   });
+  
   const [logs, setLogs] = useState<HabitLog[]>(() => {
     const saved = localStorage.getItem('logs');
-    return saved ? JSON.parse(saved) : [];
+    if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.length > 0 && parsed[0].value === undefined) {
+            return parsed.map((l: any) => ({ ...l, value: 1 }));
+        }
+        return parsed;
+    }
+    return [];
   });
+
   const [user, setUser] = useState<UserProfile>(() => {
     const saved = localStorage.getItem('user');
-    return saved ? JSON.parse(saved) : { name: 'User', xp: 0, level: 1 };
+    return saved ? JSON.parse(saved) : { name: 'User', xp: 0, level: 1, coins: 0 };
   });
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [dailyQuote, setDailyQuote] = useState<string>('');
+  
+  // Timer State
+  const [activeTimerHabit, setActiveTimerHabit] = useState<Habit | null>(null);
 
   // New Habit Form State
   const [newHabitName, setNewHabitName] = useState('');
   const [newHabitDesc, setNewHabitDesc] = useState('');
   const [newHabitIcon, setNewHabitIcon] = useState(ICONS[0]);
   const [newHabitColor, setNewHabitColor] = useState(COLORS[0]);
+  const [newHabitType, setNewHabitType] = useState<HabitType>('check');
+  const [newHabitGoal, setNewHabitGoal] = useState<number>(1);
+  const [newHabitUnit, setNewHabitUnit] = useState<string>('次');
 
   // Effects for persistence
   useEffect(() => { localStorage.setItem('habits', JSON.stringify(habits)); }, [habits]);
@@ -61,24 +85,34 @@ function App() {
   // Derived Data
   const todayStr = new Date().toISOString().split('T')[0];
 
+  const getTodayProgress = (habitId: string) => {
+      const todayLogs = logs.filter(l => l.habitId === habitId && l.date === todayStr);
+      return todayLogs.reduce((acc, curr) => acc + curr.value, 0);
+  };
+
   const getStreak = (habitId: string) => {
-    const habitLogs = logs.filter(l => l.habitId === habitId).sort((a, b) => b.timestamp - a.timestamp);
+    const habitLogs = logs.filter(l => l.habitId === habitId && l.value > 0).sort((a, b) => b.timestamp - a.timestamp);
     if (habitLogs.length === 0) return 0;
     
+    const dates = Array.from(new Set(habitLogs.map(l => l.date))).sort().reverse();
+    if (dates.length === 0) return 0;
+
     let streak = 0;
-    const doneToday = habitLogs.some(l => l.date === todayStr);
-    
-    let currentCheckDate = new Date();
-    if (!doneToday) {
-        currentCheckDate.setDate(currentCheckDate.getDate() - 1);
-    }
-    
+    const today = todayStr;
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    if (dates[0] !== today && dates[0] !== yesterdayStr) return 0;
+
+    let currentCheck = new Date();
+    if (dates[0] !== today) currentCheck.setDate(currentCheck.getDate() - 1);
+
     while (true) {
-        const checkStr = currentCheckDate.toISOString().split('T')[0];
-        const hasLog = habitLogs.some(l => l.date === checkStr);
-        if (hasLog) {
+        const checkStr = currentCheck.toISOString().split('T')[0];
+        if (dates.includes(checkStr)) {
             streak++;
-            currentCheckDate.setDate(currentCheckDate.getDate() - 1);
+            currentCheck.setDate(currentCheck.getDate() - 1);
         } else {
             break;
         }
@@ -88,18 +122,10 @@ function App() {
 
   const triggerConfetti = () => {
     const count = 200;
-    const defaults = {
-        origin: { y: 0.7 }
-    };
-
+    const defaults = { origin: { y: 0.7 } };
     function fire(particleRatio: number, opts: any) {
-        confetti({
-            ...defaults,
-            ...opts,
-            particleCount: Math.floor(count * particleRatio)
-        });
+        confetti({ ...defaults, ...opts, particleCount: Math.floor(count * particleRatio) });
     }
-
     fire(0.25, { spread: 26, startVelocity: 55 });
     fire(0.2, { spread: 60 });
     fire(0.35, { spread: 100, decay: 0.91, scalar: 0.8 });
@@ -107,32 +133,59 @@ function App() {
     fire(0.1, { spread: 120, startVelocity: 45 });
   };
 
-  const handleToggleHabit = (id: string) => {
-    const isDone = logs.some(l => l.habitId === id && l.date === todayStr);
-    
-    if (isDone) {
-      // Undo
-      setLogs(prev => prev.filter(l => !(l.habitId === id && l.date === todayStr)));
-      setUser(prev => ({ ...prev, xp: Math.max(0, prev.xp - 10) }));
-    } else {
-      // Do
-      const newLog: HabitLog = {
-        id: Date.now().toString(),
-        habitId: id,
-        date: todayStr,
-        timestamp: Date.now()
-      };
-      setLogs(prev => [...prev, newLog]);
-      triggerConfetti();
-      
-      // Add XP & Check Level Up
-      setUser(prev => {
-        const newXP = prev.xp + 10;
+  const addXP = (amount: number) => {
+    setUser(prev => {
+        const newXP = prev.xp + amount;
         const nextLevelXP = LEVEL_THRESHOLDS[prev.level] || 99999;
         const newLevel = newXP >= nextLevelXP ? prev.level + 1 : prev.level;
         return { ...prev, xp: newXP, level: newLevel };
-      });
+    });
+  };
+
+  // --- Habit Action Handlers ---
+
+  const logHabit = (habitId: string, value: number) => {
+      const newLog: HabitLog = {
+          id: Date.now().toString(),
+          habitId: habitId,
+          date: todayStr,
+          timestamp: Date.now(),
+          value: value
+      };
+      setLogs(prev => [...prev, newLog]);
+      
+      const habit = habits.find(h => h.id === habitId);
+      const current = getTodayProgress(habitId);
+      const goal = habit?.goal || 1;
+      
+      if (current < goal && current + value >= goal) {
+          triggerConfetti();
+          addXP(20);
+      } else {
+          addXP(5);
+      }
+  };
+
+  const handleToggleHabit = (habit: Habit) => {
+    const isDone = getTodayProgress(habit.id) >= habit.goal;
+    
+    if (isDone) {
+      setLogs(prev => prev.filter(l => !(l.habitId === habit.id && l.date === todayStr)));
+      setUser(prev => ({ ...prev, xp: Math.max(0, prev.xp - 20) }));
+    } else {
+      logHabit(habit.id, 1);
     }
+  };
+
+  const handleIncrement = (habit: Habit) => {
+      logHabit(habit.id, 1);
+  };
+
+  const handleTimerComplete = (minutes: number) => {
+      if (activeTimerHabit && minutes > 0) {
+          logHabit(activeTimerHabit.id, minutes);
+      }
+      setActiveTimerHabit(null);
   };
 
   const deleteHabit = (id: string) => {
@@ -151,6 +204,9 @@ function App() {
       icon: newHabitIcon,
       color: newHabitColor,
       frequency: 'daily',
+      type: newHabitType,
+      goal: newHabitType === 'check' ? 1 : newHabitGoal,
+      unit: newHabitType === 'check' ? '次' : newHabitUnit,
       createdAt: Date.now()
     };
     setHabits([...habits, newHabit]);
@@ -163,12 +219,18 @@ function App() {
     setNewHabitDesc('');
     setNewHabitIcon(ICONS[0]);
     setNewHabitColor(COLORS[0]);
+    setNewHabitType('check');
+    setNewHabitGoal(1);
+    setNewHabitUnit('次');
   }
 
   const addSuggestedHabit = (suggested: Omit<Habit, 'id' | 'createdAt'>) => {
     const newHabit: Habit = {
         ...suggested,
         id: Date.now().toString(),
+        type: 'check',
+        goal: 1,
+        unit: '次',
         createdAt: Date.now()
     };
     setHabits([...habits, newHabit]);
@@ -176,20 +238,72 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Progress to next level
   const currentLevelXP = LEVEL_THRESHOLDS[user.level - 1] || 0;
   const nextLevelXP = LEVEL_THRESHOLDS[user.level] || 10000;
   const levelProgress = Math.min(100, Math.max(0, ((user.xp - currentLevelXP) / (nextLevelXP - currentLevelXP)) * 100));
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 font-sans text-slate-900 pb-24">
+    <div className="flex min-h-screen bg-slate-50 font-sans text-slate-900 md:flex-row flex-col">
       
-      {/* Header Area with Gradient */}
-      <div className="bg-white pb-4 pt-safe sticky top-0 z-20 border-b border-slate-100 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)]">
+      {/* Timer Overlay */}
+      {activeTimerHabit && (
+          <FocusTimer 
+            habit={activeTimerHabit}
+            isOpen={!!activeTimerHabit}
+            onClose={() => setActiveTimerHabit(null)}
+            onComplete={handleTimerComplete}
+          />
+      )}
+
+      {/* --- SIDEBAR (Desktop) --- */}
+      <aside className="hidden md:flex w-72 flex-col bg-white border-r border-slate-200 sticky top-0 h-screen p-6">
+        {/* Branding */}
+        <div className="mb-8">
+             <h1 className="text-3xl font-black tracking-tight bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
+                 Polaris
+             </h1>
+             <p className="text-xs text-slate-400 font-medium mt-1">Make consistency an instinct.</p>
+        </div>
+
+        {/* User Profile Card */}
+        <div className="mb-8 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+            <div className="flex items-center justify-between mb-2">
+                <span className="font-bold text-slate-700">Level {user.level}</span>
+                <span className="text-xs font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">{Math.floor(user.xp)} XP</span>
+            </div>
+            <div className="w-full h-2 overflow-hidden rounded-full bg-slate-200">
+                <motion.div 
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-500"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${levelProgress}%` }}
+                />
+            </div>
+            <p className="text-[10px] text-slate-400 mt-2 text-right">Next: {nextLevelXP - user.xp} XP to go</p>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 space-y-2">
+            <SidebarButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard />} label="今日概览" />
+            <SidebarButton active={activeTab === 'stats'} onClick={() => setActiveTab('stats')} icon={<BarChart3 />} label="数据统计" />
+            <SidebarButton active={activeTab === 'ai'} onClick={() => setActiveTab('ai')} icon={<Bot />} label="AI 智能教练" />
+        </nav>
+
+        {/* Add Button */}
+        <button 
+            onClick={() => setShowAddModal(true)}
+            className="mt-6 flex items-center justify-center gap-2 w-full rounded-2xl bg-slate-900 py-3.5 text-white font-bold shadow-lg shadow-slate-200 hover:bg-slate-800 transition-colors"
+        >
+            <Plus size={20} />
+            <span>添加习惯</span>
+        </button>
+      </aside>
+
+      {/* --- HEADER (Mobile Only) --- */}
+      <div className="md:hidden bg-white pb-4 pt-safe sticky top-0 z-20 border-b border-slate-100 shadow-[0_2px_15px_-3px_rgba(0,0,0,0.07)]">
           <div className="mx-auto flex max-w-md items-center justify-between px-6 pt-4">
             <div>
                 <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
-                    HabitFlow
+                    Polaris
                 </h1>
                 <div className="flex items-center gap-1.5 mt-1 text-slate-500">
                     <Calendar size={12} />
@@ -215,106 +329,136 @@ function App() {
           </div>
       </div>
 
-      {/* Main Content */}
-      <main className="flex-1 px-5 pt-6 mx-auto w-full max-w-md space-y-6">
-        <AnimatePresence mode="wait">
-          {activeTab === 'dashboard' && (
-            <motion.div 
-                key="dashboard"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="space-y-6"
-            >
-              {/* Daily Quote Card */}
-              {dailyQuote && (
+      {/* --- MAIN CONTENT --- */}
+      <main className="flex-1 overflow-y-auto h-screen scroll-smooth">
+        <div className="px-5 md:px-10 pt-6 md:pt-10 mx-auto w-full max-w-md md:max-w-5xl space-y-6 pb-24 md:pb-10">
+            {/* Desktop Page Title */}
+            <div className="hidden md:flex items-end justify-between mb-8">
+                <div>
+                    <h2 className="text-3xl font-bold text-slate-800">
+                        {activeTab === 'dashboard' && '今日概览'}
+                        {activeTab === 'stats' && '数据统计'}
+                        {activeTab === 'ai' && '智能教练'}
+                    </h2>
+                    <p className="text-slate-500 mt-1">
+                        {new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
+                    </p>
+                </div>
+                {activeTab === 'dashboard' && dailyQuote && (
+                    <div className="text-right max-w-md">
+                        <p className="text-sm font-medium text-indigo-600 italic">"{dailyQuote}"</p>
+                    </div>
+                )}
+            </div>
+
+            <AnimatePresence mode="wait">
+            {activeTab === 'dashboard' && (
                 <motion.div 
-                    initial={{ opacity: 0, scale: 0.95 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 p-5 text-white shadow-lg shadow-indigo-200"
+                    key="dashboard"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-6"
                 >
-                    <div className="absolute top-0 right-0 -mt-2 -mr-2 text-white/10">
-                        <QuoteIcon size={80} />
-                    </div>
-                    <div className="relative z-10">
-                        <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-200 mb-2">每日寄语</h2>
-                        <p className="font-medium text-lg leading-relaxed text-shadow-sm">"{dailyQuote}"</p>
-                    </div>
-                </motion.div>
-              )}
+                {/* Mobile Daily Quote */}
+                <div className="md:hidden">
+                    {dailyQuote && (
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 p-5 text-white shadow-lg shadow-indigo-200"
+                        >
+                            <div className="absolute top-0 right-0 -mt-2 -mr-2 text-white/10">
+                                <QuoteIcon size={80} />
+                            </div>
+                            <div className="relative z-10">
+                                <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-200 mb-2">每日寄语</h2>
+                                <p className="font-medium text-lg leading-relaxed text-shadow-sm">"{dailyQuote}"</p>
+                            </div>
+                        </motion.div>
+                    )}
+                </div>
 
-              {/* Habit List */}
-              <div className="space-y-4">
-                  {habits.length === 0 ? (
-                      <div className="text-center py-12 rounded-3xl bg-white border border-dashed border-slate-200">
-                          <div className="mx-auto w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-500 mb-4">
-                              <Plus size={32} />
-                          </div>
-                          <h3 className="text-lg font-bold text-slate-700 mb-2">开始你的第一个习惯</h3>
-                          <p className="text-slate-400 text-sm mb-6">建立好习惯，成就更好的自己</p>
-                          <button 
+                {/* Habit List */}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {habits.length === 0 ? (
+                        <div className="col-span-full text-center py-12 rounded-3xl bg-white border border-dashed border-slate-200">
+                            <div className="mx-auto w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-500 mb-4">
+                                <Plus size={32} />
+                            </div>
+                            <h3 className="text-lg font-bold text-slate-700 mb-2">开始你的北极星之旅</h3>
+                            <p className="text-slate-400 text-sm mb-6">让坚持成为一种本能</p>
+                            <button 
+                                onClick={() => setShowAddModal(true)}
+                                className="bg-indigo-600 text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition"
+                            >
+                                立即添加
+                            </button>
+                        </div>
+                    ) : (
+                        habits.map(habit => {
+                            const progress = getTodayProgress(habit.id);
+                            const isCompleted = progress >= habit.goal;
+                            return (
+                                <HabitCard 
+                                    key={habit.id}
+                                    habit={habit}
+                                    progress={progress}
+                                    isCompleted={isCompleted}
+                                    streak={getStreak(habit.id)}
+                                    completedDates={logs.filter(l => l.habitId === habit.id && l.value > 0).map(l => l.date)}
+                                    onToggle={() => handleToggleHabit(habit)}
+                                    onIncrement={() => handleIncrement(habit)}
+                                    onStartTimer={() => setActiveTimerHabit(habit)}
+                                    onDelete={() => deleteHabit(habit.id)}
+                                />
+                            );
+                        })
+                    )}
+                    
+                    {/* Inline Add Button (Mobile) */}
+                    {habits.length > 0 && (
+                        <button 
                             onClick={() => setShowAddModal(true)}
-                            className="bg-indigo-600 text-white px-6 py-2 rounded-full font-bold text-sm shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition"
-                          >
-                              立即添加
-                          </button>
-                      </div>
-                  ) : (
-                      habits.map(habit => (
-                        <HabitCard 
-                            key={habit.id}
-                            habit={habit}
-                            isCompleted={logs.some(l => l.habitId === habit.id && l.date === todayStr)}
-                            streak={getStreak(habit.id)}
-                            completedDates={logs.filter(l => l.habitId === habit.id).map(l => l.date)}
-                            onToggle={() => handleToggleHabit(habit.id)}
-                            onDelete={() => deleteHabit(habit.id)}
-                        />
-                      ))
-                  )}
-                  
-                  {/* Inline Add Button for visibility */}
-                  {habits.length > 0 && (
-                      <button 
-                        onClick={() => setShowAddModal(true)}
-                        className="w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2 group"
-                      >
-                          <div className="w-6 h-6 rounded-full bg-slate-100 group-hover:bg-indigo-200 flex items-center justify-center transition-colors">
-                              <Plus size={14} className="text-slate-400 group-hover:text-indigo-600" />
-                          </div>
-                          添加新习惯
-                      </button>
-                  )}
-              </div>
-            </motion.div>
-          )}
+                            className="md:hidden w-full py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 font-bold hover:border-indigo-300 hover:text-indigo-500 hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2 group"
+                        >
+                            <div className="w-6 h-6 rounded-full bg-slate-100 group-hover:bg-indigo-200 flex items-center justify-center transition-colors">
+                                <Plus size={14} className="text-slate-400 group-hover:text-indigo-600" />
+                            </div>
+                            添加新习惯
+                        </button>
+                    )}
+                </div>
+                </motion.div>
+            )}
 
-          {activeTab === 'stats' && (
-            <motion.div key="stats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <StatsView logs={logs} totalHabitsCount={habits.length} />
-            </motion.div>
-          )}
+            {activeTab === 'stats' && (
+                <motion.div key="stats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                    <StatsView logs={logs} totalHabitsCount={habits.length} />
+                </motion.div>
+            )}
 
-          {activeTab === 'ai' && (
-            <motion.div key="ai" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <AICoach habits={habits} logs={logs} user={user} onAddSuggestedHabit={addSuggestedHabit} />
-            </motion.div>
-          )}
-        </AnimatePresence>
+            {activeTab === 'ai' && (
+                <motion.div key="ai" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                    <AICoach habits={habits} logs={logs} user={user} onAddSuggestedHabit={addSuggestedHabit} />
+                </motion.div>
+            )}
+            </AnimatePresence>
+        </div>
       </main>
 
-      {/* Floating Add Button (Mobile Standard) */}
+      {/* Floating Add Button (Mobile Only) */}
       <motion.button
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.9 }}
         onClick={() => setShowAddModal(true)}
-        className="fixed bottom-24 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-xl shadow-slate-300 ring-4 ring-white"
+        className="md:hidden fixed bottom-24 right-6 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-slate-900 text-white shadow-xl shadow-slate-300 ring-4 ring-white"
       >
         <Plus size={28} />
       </motion.button>
 
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-lg border-t border-slate-200 px-6 py-3 pb-safe">
+      {/* Bottom Navigation (Mobile Only) */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/90 backdrop-blur-lg border-t border-slate-200 px-6 py-3 pb-safe">
         <div className="mx-auto flex max-w-md items-center justify-around">
             <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard />} label="今日" />
             <NavButton active={activeTab === 'stats'} onClick={() => setActiveTab('stats')} icon={<BarChart3 />} label="统计" />
@@ -333,7 +477,7 @@ function App() {
             />
             <motion.div 
                 initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
-                className="fixed bottom-0 left-0 right-0 z-50 rounded-t-3xl bg-white p-6 shadow-2xl mx-auto max-w-md max-h-[90vh] overflow-y-auto"
+                className="fixed bottom-0 left-0 right-0 md:inset-0 md:m-auto z-50 md:h-fit md:max-w-md rounded-t-3xl md:rounded-3xl bg-white p-6 shadow-2xl mx-auto max-h-[90vh] overflow-y-auto"
             >
                 <div className="mb-6 flex items-center justify-between">
                     <div>
@@ -346,26 +490,65 @@ function App() {
                 </div>
                 
                 <div className="space-y-6">
+                    {/* Habit Type Selection */}
+                    <div className="grid grid-cols-3 gap-3">
+                         <button 
+                             onClick={() => setNewHabitType('check')}
+                             className={`flex flex-col items-center justify-center gap-2 p-3 rounded-2xl border-2 transition-all ${newHabitType === 'check' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-500'}`}
+                         >
+                             <CheckSquare size={24} />
+                             <span className="text-xs font-bold">常规打卡</span>
+                         </button>
+                         <button 
+                             onClick={() => { setNewHabitType('count'); setNewHabitUnit('次'); setNewHabitGoal(5); }}
+                             className={`flex flex-col items-center justify-center gap-2 p-3 rounded-2xl border-2 transition-all ${newHabitType === 'count' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-500'}`}
+                         >
+                             <Hash size={24} />
+                             <span className="text-xs font-bold">量化计数</span>
+                         </button>
+                         <button 
+                             onClick={() => { setNewHabitType('timer'); setNewHabitUnit('分钟'); setNewHabitGoal(30); }}
+                             className={`flex flex-col items-center justify-center gap-2 p-3 rounded-2xl border-2 transition-all ${newHabitType === 'timer' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-100 bg-white text-slate-500'}`}
+                         >
+                             <TimerIcon size={24} />
+                             <span className="text-xs font-bold">专注计时</span>
+                         </button>
+                    </div>
+
                     <div>
                         <label className="mb-2 block text-sm font-bold text-slate-700">习惯名称</label>
                         <input 
                             value={newHabitName}
                             onChange={(e) => setNewHabitName(e.target.value)}
-                            placeholder="例如：每天喝水"
+                            placeholder="例如：早起运动"
                             className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-lg font-bold text-slate-800 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all"
                             autoFocus
                         />
                     </div>
 
-                    <div>
-                         <label className="mb-2 block text-sm font-bold text-slate-700">描述（可选）</label>
-                         <input 
-                             value={newHabitDesc}
-                             onChange={(e) => setNewHabitDesc(e.target.value)}
-                             placeholder="例如：起床后喝一杯温水"
-                             className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all"
-                         />
-                    </div>
+                    {/* Goal Input for Count/Timer */}
+                    {newHabitType !== 'check' && (
+                        <div className="flex gap-4">
+                            <div className="flex-1">
+                                <label className="mb-2 block text-sm font-bold text-slate-700">目标数量</label>
+                                <input 
+                                    type="number"
+                                    value={newHabitGoal}
+                                    onChange={(e) => setNewHabitGoal(Number(e.target.value))}
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-bold text-slate-800 outline-none focus:border-indigo-500"
+                                />
+                            </div>
+                            <div className="w-1/3">
+                                <label className="mb-2 block text-sm font-bold text-slate-700">单位</label>
+                                <input 
+                                    value={newHabitUnit}
+                                    onChange={(e) => setNewHabitUnit(e.target.value)}
+                                    placeholder="次/分钟"
+                                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-bold text-slate-800 outline-none focus:border-indigo-500"
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     <div>
                         <label className="mb-2 block text-sm font-bold text-slate-700">选择图标</label>
@@ -417,11 +600,21 @@ const NavButton = ({ active, onClick, icon, label }: { active: boolean, onClick:
         className={`relative flex flex-col items-center gap-1 p-2 transition-colors duration-300 ${active ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}
     >
         <div className={`transition-transform duration-300 ${active ? '-translate-y-1' : ''}`}>
-             {React.cloneElement(icon as React.ReactElement, { size: 24, strokeWidth: active ? 2.5 : 2 })}
+             {React.cloneElement(icon as React.ReactElement<any>, { size: 24, strokeWidth: active ? 2.5 : 2 })}
         </div>
         <span className={`text-[10px] font-bold transition-opacity duration-300 ${active ? 'opacity-100' : 'opacity-0'} absolute -bottom-1`}>
             {label}
         </span>
+    </button>
+);
+
+const SidebarButton = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
+    <button 
+        onClick={onClick}
+        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 ${active ? 'bg-indigo-50 text-indigo-600 font-bold shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
+    >
+        {React.cloneElement(icon as React.ReactElement<any>, { size: 20, strokeWidth: active ? 2.5 : 2 })}
+        <span className="text-sm">{label}</span>
     </button>
 );
 

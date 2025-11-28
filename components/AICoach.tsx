@@ -121,7 +121,10 @@ export const AICoach: React.FC<AICoachProps> = ({ habits, logs, user, onAddSugge
                             description: suggestion.description,
                             icon: suggestion.icon,
                             color: 'bg-indigo-500', // Default color
-                            frequency: 'daily'
+                            frequency: 'daily',
+                            type: 'check',
+                            goal: 1,
+                            unit: '次'
                         })}
                         className="text-indigo-600 hover:bg-indigo-50 p-2 rounded-full"
                     >
