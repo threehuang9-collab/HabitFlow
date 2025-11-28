@@ -89,3 +89,33 @@ export const suggestNewHabits = async (currentHabits: Habit[]): Promise<{name: s
         return [];
     }
 }
+
+export const getDailyQuote = async (): Promise<string> => {
+    const ai = getClient();
+    const fallbacks = [
+        "坚持不是因为看到了希望，而是因为坚持了才能看到希望。",
+        "每一个不曾起舞的日子，都是对生命的辜负。",
+        "种一棵树最好的时间是十年前，其次是现在。",
+        "自律即自由。",
+        "每天进步一点点，就是大大的成功。",
+        "行百里者半九十。"
+    ];
+    const randomFallback = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+
+    if (!ai) return randomFallback;
+
+    const prompt = `
+        请给出一句简短的、充满力量的中文每日励志语录，适合习惯养成和个人成长。
+        不要解释，只要那句话。不要超过30个字。
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: prompt,
+        });
+        return response.text?.trim() || randomFallback;
+    } catch (e) {
+        return randomFallback;
+    }
+};
